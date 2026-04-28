@@ -85,6 +85,72 @@ const saveFilesRegistry = async (registry) => {
   );
 };
 
+/**
+ * [IONOSPHERE] Consecutive User Turn Squasher
+ *
+ * Walks the messages array and collapses any run of two or more consecutive
+ * user turns into a single user turn. The merged message body is:
+ *
+ *   "The user sent these messages in order:\n\n1. ...\n2. ...\n\n"
+ *
+ * Single user turns are left untouched. Non-user roles (system, assistant,
+ * tool) are always passed through as-is and break any active run.
+ *
+ * @param {Array} messages  OpenAI-style messages array
+ * @returns {Array}         New messages array with consecutive user turns merged
+ */
+const squashConsecutiveUserTurns = (messages) => {
+  const result = [];
+  let i = 0;
+
+  while (i < messages.length) {
+    const msg = messages[i];
+
+    // Non-user messages pass through unchanged
+    if (msg.role !== "user") {
+      result.push(msg);
+      i++;
+      continue;
+    }
+
+    // Collect the run of consecutive user turns starting at i
+    const run = [];
+    while (i < messages.length && messages[i].role === "user") {
+      run.push(messages[i]);
+      i++;
+    }
+
+    if (run.length === 1) {
+      // Single user turn – no change needed
+      result.push(run[0]);
+    } else {
+      // Multiple consecutive user turns – merge into one
+      const parts = run.map((m, idx) => {
+        let text = "";
+        if (typeof m.content === "string") {
+          text = m.content;
+        } else if (Array.isArray(m.content)) {
+          text = m.content
+            .map((p) => (p.type === "text" ? p.text : ""))
+            .join("");
+        }
+        return `${idx + 1}. ${text}`;
+      });
+
+      const mergedContent =
+        `The user sent these messages in order:\n\n${parts.join("\n")}\n\n`;
+
+      console.log(
+        `[API] squashConsecutiveUserTurns: merged ${run.length} consecutive user turns into one.`,
+      );
+
+      result.push({ role: "user", content: mergedContent });
+    }
+  }
+
+  return result;
+};
+
 // Setup multer for persistent uploads separately
 const persistentStorage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -485,6 +551,13 @@ app.post("/v1/chat/completions", handleUpload, async (req, res) => {
         ),
       });
     }
+
+    // [IONOSPHERE] Consecutive User Turn Squashing
+    // Some clients accidentally send multiple back-to-back user turns.
+    // Merge any run of consecutive user turns into a single user turn so that
+    // the model (which requires strict user/model alternation) never sees an
+    // invalid conversation structure.
+    messages = squashConsecutiveUserTurns(messages);
 
     // logRequestForensics(req);
 
