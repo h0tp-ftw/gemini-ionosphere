@@ -11,15 +11,13 @@ export class CliErrorParser {
     if (!stderrText) return null;
 
     const isAuthError =
-      (/(please log in|\bauthorization\b|authenticate|not authenticated)/i.test(
-        stderrText,
-      ) &&
-        !/unauthorized tool call/i.test(stderrText)) ||
-      (/credentials/i.test(stderrText) &&
-        !/loaded cached credentials/i.test(stderrText));
+      (/(please log in|authenticate|not authenticated)/i.test(stderrText) ||
+        (/\bauthorization\b/i.test(stderrText) && !/Authorization: '<<REDACTED/i.test(stderrText))) &&
+      !/unauthorized tool call/i.test(stderrText) &&
+      !/status: 500/i.test(stderrText);
 
     const isResourceError =
-      /RESOURCE_EXHAUSTED|rateLimitExceeded|429|No capacity available|exhausted your capacity|TerminalQuotaError|quota will reset|MODEL_CAPACITY_EXHAUSTED/i.test(
+      /RESOURCE_EXHAUSTED|rateLimitExceeded|429|No capacity available|exhausted your capacity|TerminalQuotaError|quota will reset|MODEL_CAPACITY_EXHAUSTED|500|backendError|INTERNAL|Internal error encountered/i.test(
         stderrText,
       );
 
