@@ -1079,4 +1079,31 @@ if (fs.existsSync(envContextTarget)) {
   fs.writeFileSync(envContextTarget, content, "utf8");
 }
 
+// 14. Patch projectRegistry.js (Ghost Ownership Suppression)
+const projectRegistryTarget = path.resolve(
+  __dirname,
+  "..",
+  "node_modules",
+  "@google",
+  "gemini-cli-core",
+  "dist",
+  "src",
+  "config",
+  "projectRegistry.js",
+);
+if (fs.existsSync(projectRegistryTarget)) {
+  console.log(`[Patcher] Patching projectRegistry.js for Ghost Ownership Suppression: ${projectRegistryTarget}`);
+  let content = fs.readFileSync(projectRegistryTarget, "utf8");
+
+  const ownershipCheckSearch = "                // Collision!\n                throw new Error(`Slug ${slug} is already owned by ${owner}`);";
+  const ownershipCheckReplace = "                // [IONOSPHERE] Ownership override: if the owner directory doesn't exist, we can take it.\n                if (!fs.existsSync(owner)) {\n                    continue;\n                }\n                // Collision!\n                throw new Error(`Slug ${slug} is already owned by ${owner}`);";
+
+  if (content.includes(ownershipCheckSearch) && !content.includes("[IONOSPHERE] Ownership override")) {
+    content = content.replace(ownershipCheckSearch, ownershipCheckReplace);
+    console.log("  - Applied Ghost Ownership suppression patch.");
+  }
+
+  fs.writeFileSync(projectRegistryTarget, content, "utf8");
+}
+
 console.log("[Patcher] Patching complete.");

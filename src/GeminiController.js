@@ -1043,13 +1043,21 @@ export class GeminiController extends EventEmitter {
               activeCallbacks,
             );
             if (errorResult?.type === "FATAL") {
-              console.log(`[DEBUG] GeminiController: Received FATAL from parseStderr. Killing process ${proc.pid}`);
+              // [IONOSPHERE] Preserve the largest retryAfterMs seen across stderr lines
+              // (the same error often appears twice in stderr output).
+              if (errorResult.retryAfterMs) {
+                proc.pendingRetryAfterMs = Math.max(proc.pendingRetryAfterMs || 0, errorResult.retryAfterMs);
+              }
+              console.log(`[DEBUG] GeminiController: Received FATAL from parseStderr. Killing process ${proc.pid}${proc.pendingRetryAfterMs ? ` (retryAfterMs: ${proc.pendingRetryAfterMs})` : ''}`);
               proc.kill("SIGKILL");
             } else if (errorResult?.type === "IGNORE") {
               // The CLI will still emit a 0-token 'result' and exit with code 1.
               // Store the real error so the result handler can surface it properly
               // instead of treating the empty result as a success.
               proc.pendingQuotaError = errorResult.message;
+              if (errorResult.retryAfterMs) {
+                proc.pendingRetryAfterMs = Math.max(proc.pendingRetryAfterMs || 0, errorResult.retryAfterMs);
+              }
             }
           }
         });
@@ -1144,7 +1152,7 @@ export class GeminiController extends EventEmitter {
           }
 
           if (proc.pendingQuotaError) {
-            reject(new RetryableError(proc.pendingQuotaError, "quota", 0, false, false, true));
+            reject(new RetryableError(proc.pendingQuotaError, "quota", 0, false, false, true, proc.pendingRetryAfterMs || null));
             return;
           }
 
@@ -1170,7 +1178,7 @@ export class GeminiController extends EventEmitter {
             const errorMsg = diagnostics ? `CLI failed (code ${code}): ${diagnostics}` : `CLI process exited with code ${code}`;
             // Heuristic for quota or transient backend errors in generic failures
             if (/429|Quota|Capacity|500|Internal|backendError/i.test(errorMsg)) {
-              reject(new RetryableError(errorMsg, "quota", 0, false, false, true));
+              reject(new RetryableError(errorMsg, "quota", 0, false, false, true, proc.pendingRetryAfterMs || null));
             } else {
               reject(new Error(errorMsg));
             }

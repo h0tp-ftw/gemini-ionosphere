@@ -5,6 +5,38 @@ import { createError, ErrorType, ErrorCode } from "./errorHandler.js";
  */
 export class CliErrorParser {
   /**
+   * Extracts the retry delay (in ms) from Gemini CLI stderr output.
+   * Supports multiple formats seen in production:
+   *   1. Object dump:  retryDelayMs: 61253798.068514
+   *   2. Human-readable: "quota will reset after 17h0m53s"
+   *   3. Human-readable: "quota will reset after 53s"
+   * @param {string} stderrText - Raw stderr text
+   * @returns {number|null} Retry delay in milliseconds, or null if not parseable
+   */
+  static parseRetryDelay(stderrText) {
+    if (!stderrText) return null;
+
+    // Pattern 1: retryDelayMs property from TerminalQuotaError object dump
+    const msMatch = stderrText.match(/retryDelayMs:\s*([\d.]+)/);
+    if (msMatch) {
+      const ms = parseFloat(msMatch[1]);
+      if (ms > 0 && isFinite(ms)) return Math.ceil(ms);
+    }
+
+    // Pattern 2: Human-readable "quota will reset after XhYmZs" or "XmYs" or "Xs"
+    const humanMatch = stderrText.match(/quota will reset after\s+(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?/i);
+    if (humanMatch) {
+      const hours = parseInt(humanMatch[1] || '0', 10);
+      const minutes = parseInt(humanMatch[2] || '0', 10);
+      const seconds = parseInt(humanMatch[3] || '0', 10);
+      const totalMs = ((hours * 3600) + (minutes * 60) + seconds) * 1000;
+      if (totalMs > 0) return totalMs;
+    }
+
+    return null;
+  }
+
+  /**
    * Identifies if an error is fatal and should terminate the process.
    */
   parseStderr(stderrText, activeCallbacks) {
@@ -52,7 +84,12 @@ export class CliErrorParser {
 
     if (isResourceError) {
       const errorMsg = `Gemini API Quota/Capacity Exhausted (429). Raw: ${stderrText}`;
-      console.log(`[DEBUG] CliErrorParser: Matched isResourceError! Error message: ${errorMsg}`);
+      const retryAfterMs = CliErrorParser.parseRetryDelay(stderrText);
+      if (retryAfterMs) {
+        console.log(`[DEBUG] CliErrorParser: Matched isResourceError! retryAfterMs=${retryAfterMs} (${Math.round(retryAfterMs / 1000)}s). Error: ${errorMsg.substring(0, 120)}`);
+      } else {
+        console.log(`[DEBUG] CliErrorParser: Matched isResourceError! (no retry delay parsed). Error: ${errorMsg.substring(0, 120)}`);
+      }
       // [IONOSPHERE] Proactive Termination: Even with SILENT_FALLBACK, we return FATAL 
       // so the GeminiController kills the stuck CLI process immediately. This allows 
       // the orchestrator (index.js) to trigger fallback/retry logic without waiting 
@@ -61,7 +98,7 @@ export class CliErrorParser {
         activeCallbacks.onError(
           createError(errorMsg, ErrorType.RATE_LIMIT, ErrorCode.RATE_LIMIT_EXCEEDED),
         );
-      return { type: "FATAL", message: errorMsg };
+      return { type: "FATAL", message: errorMsg, retryAfterMs };
     }
 
     if (isContextError) {

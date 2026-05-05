@@ -239,6 +239,48 @@ const activeTurnsByHash = new Map();
 // globalPromiseMap: turnId -> executePromise
 const globalPromiseMap = new Map();
 
+// [IONOSPHERE] Quota Cooldown Cache: model name -> epoch ms when cooldown expires.
+// When a model hits QUOTA_EXHAUSTED with a retryDelayMs, we record the absolute
+// timestamp when the quota resets. Future requests check this cache to instantly
+// skip exhausted models in fallback ladders, avoiding costly spawn+fail cycles.
+const quotaCooldowns = new Map();
+
+/**
+ * Records a quota cooldown for a model.
+ * @param {string} model - The model name that hit quota.
+ * @param {number|null} retryAfterMs - How many ms until quota resets.
+ *   If null, applies a conservative default cooldown (60s).
+ */
+function recordQuotaCooldown(model, retryAfterMs) {
+  if (!retryAfterMs) return; // No data = no cooldown (don't guess)
+  const expiresAt = Date.now() + retryAfterMs;
+  const existing = quotaCooldowns.get(model);
+  // Only extend cooldowns, never shorten them (idempotent for duplicate errors)
+  if (existing && existing > expiresAt) return;
+  quotaCooldowns.set(model, expiresAt);
+  console.log(`[QUOTA COOLDOWN] Model ${model} exhausted. Cooldown until ${new Date(expiresAt).toISOString()} (${Math.round(retryAfterMs / 1000)}s)`);
+}
+
+/**
+ * Checks if a model is currently in quota cooldown.
+ * If the cooldown has expired, removes the entry and returns false.
+ * @param {string} model - The model name to check.
+ * @returns {{ coolingDown: boolean, remainingMs: number }}
+ */
+function checkQuotaCooldown(model) {
+  const expiresAt = quotaCooldowns.get(model);
+  if (!expiresAt) return { coolingDown: false, remainingMs: 0 };
+
+  const remaining = expiresAt - Date.now();
+  if (remaining <= 0) {
+    quotaCooldowns.delete(model);
+    console.log(`[QUOTA COOLDOWN] Model ${model} cooldown expired. Cleared.`);
+    return { coolingDown: false, remainingMs: 0 };
+  }
+
+  return { coolingDown: true, remainingMs: remaining };
+}
+
 const MAX_CONCURRENT_CLI = parseInt(process.env.MAX_CONCURRENT_CLI) || 5;
 let currentlyRunning = 0;
 const requestQueue = [];
@@ -851,8 +893,43 @@ app.post("/v1/chat/completions", handleUpload, async (req, res) => {
     let modelQueue = [];
     if (AUTO_MODEL_LADDERS[responseModel]) {
       modelQueue = [...AUTO_MODEL_LADDERS[responseModel]];
-      responseModel = modelQueue.shift();
-      console.log(`[API] [Turn ${activeTurnId}] Initializing Auto-Model ladder for ${req.body.model} -> starting with ${responseModel}`);
+      // Skip models currently in quota cooldown at ladder initialization
+      while (modelQueue.length > 0) {
+        const { coolingDown, remainingMs } = checkQuotaCooldown(modelQueue[0]);
+        if (coolingDown) {
+          console.log(`[API] [Turn ${activeTurnId}] Skipping ${modelQueue[0]} in ladder — quota cooldown (${Math.round(remainingMs / 1000)}s remaining)`);
+          modelQueue.shift();
+        } else {
+          break;
+        }
+      }
+      if (modelQueue.length > 0) {
+        responseModel = modelQueue.shift();
+      } else {
+        // All models in ladder are exhausted — fall through with the original
+        // first model (it will fail fast and return a proper 429)
+        responseModel = AUTO_MODEL_LADDERS[req.body.model][0];
+        console.warn(`[API] [Turn ${activeTurnId}] All models in ladder ${req.body.model} are in quota cooldown. Falling through with ${responseModel}.`);
+      }
+      console.log(`[API] [Turn ${activeTurnId}] Initializing Auto-Model ladder for ${req.body.model} -> starting with ${responseModel} (remaining queue: [${modelQueue.join(', ')}])`);
+    } else {
+      // [IONOSPHERE] Direct model request: check cooldown and return 429 immediately
+      const { coolingDown, remainingMs } = checkQuotaCooldown(responseModel);
+      if (coolingDown) {
+        console.log(`[API] [Turn ${activeTurnId}] Direct model ${responseModel} is in quota cooldown (${Math.round(remainingMs / 1000)}s remaining). Returning 429.`);
+        const err = createError(
+          `Model ${responseModel} is in quota cooldown. Retry after ${Math.round(remainingMs / 1000)}s.`,
+          ErrorType.RATE_LIMIT,
+          ErrorCode.RATE_LIMIT_EXCEEDED,
+        );
+        if (isStreaming) {
+          res.setHeader("Content-Type", "text/event-stream");
+          res.setHeader("Cache-Control", "no-cache");
+          res.setHeader("Connection", "keep-alive");
+        }
+        res.setHeader("Retry-After", Math.ceil(remainingMs / 1000));
+        return res.status(429).json({ error: err });
+      }
     }
 
     const onText = (text) => {
@@ -2536,17 +2613,31 @@ app.post("/v1/chat/completions", handleUpload, async (req, res) => {
               throw err;
             }
             
+            // [IONOSPHERE] Record cooldown for the model that just failed
+            recordQuotaCooldown(responseModel, err.retryAfterMs);
+            
             const isFutile = /reset after|quota will reset/i.test(err.message);
             quotaRetries++;
             
-            // [IONOSPHERE] Auto-Model Fallback Logic
+            // [IONOSPHERE] Auto-Model Fallback Logic (with cooldown-aware skipping)
+            // Skip any models in the queue that are also in cooldown
+            while (modelQueue.length > 0) {
+              const { coolingDown, remainingMs } = checkQuotaCooldown(modelQueue[0]);
+              if (coolingDown) {
+                console.log(`[API] [Turn ${activeTurnId}] Skipping ${modelQueue[0]} in fallback — quota cooldown (${Math.round(remainingMs / 1000)}s remaining)`);
+                modelQueue.shift();
+              } else {
+                break;
+              }
+            }
+            
             if (modelQueue.length > 0) {
               const oldModel = responseModel;
               responseModel = modelQueue.shift();
               console.log(`[API] [Turn ${activeTurnId}] Unified Retry: Quota Fallback (${quotaRetries}/${MAX_QUOTA_RETRIES}). Switching: ${oldModel} -> ${responseModel}`);
             } else {
               if (isFutile) {
-                console.warn(`[API] [Turn ${activeTurnId}] Quota error is futile (long reset). Failing immediately.`);
+                console.warn(`[API] [Turn ${activeTurnId}] Quota error is futile (long reset) and no fallback models available. Failing immediately.`);
                 throw err;
               }
               console.log(`[API] [Turn ${activeTurnId}] Unified Retry: Quota (Attempt ${quotaRetries}/${MAX_QUOTA_RETRIES}). Backing off 10s...`);
@@ -2766,6 +2857,29 @@ app.get("/v1/models/:model", (req, res) => {
 
 const serverStartTime = Date.now();
 
+// [IONOSPHERE] Quota Cooldown Status Endpoint
+app.get("/v1/quota-status", (req, res) => {
+  const status = {};
+  for (const [model, expiresAt] of quotaCooldowns.entries()) {
+    const remaining = expiresAt - Date.now();
+    if (remaining > 0) {
+      status[model] = {
+        expiresAt: new Date(expiresAt).toISOString(),
+        remainingMs: remaining,
+        remainingSec: Math.round(remaining / 1000),
+        remainingHuman: remaining > 3600000
+          ? `${Math.floor(remaining / 3600000)}h ${Math.floor((remaining % 3600000) / 60000)}m`
+          : remaining > 60000
+            ? `${Math.floor(remaining / 60000)}m ${Math.floor((remaining % 60000) / 1000)}s`
+            : `${Math.round(remaining / 1000)}s`,
+      };
+    } else {
+      quotaCooldowns.delete(model);
+    }
+  }
+  res.json({ cooldowns: status, count: Object.keys(status).length });
+});
+
 app.get("/health", (req, res) => {
   const uptimeMs = Date.now() - serverStartTime;
   const uptimeMin = Math.floor(uptimeMs / 60000);
@@ -2785,6 +2899,7 @@ app.get("/health", (req, res) => {
     pendingToolCalls: pendingToolCalls.size,
     warmHandoff: WARM_HANDOFF_ENABLED,
     model: process.env.GEMINI_MODEL || "gemini-2.5-flash-lite",
+    quotaCooldowns: quotaCooldowns.size,
   });
 });
 
