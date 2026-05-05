@@ -2421,6 +2421,14 @@ app.post("/v1/chat/completions", handleUpload, async (req, res) => {
       retryZeroOutput = false;
 
       try {
+        // [IONOSPHERE] Ensure turnTempDir exists before each retry attempt.
+        // When a hijacked (previously-parked) turn fails, the `turn_closed` event
+        // handler fires cleanupWorkspace() which deletes turnTempDir. The retry
+        // loop still needs it for tools.json, settings.json, etc.
+        if (!fs.existsSync(turnTempDir)) {
+          fs.mkdirSync(turnTempDir, { recursive: true });
+        }
+
         // [IONOSPHERE] Dynamic Configuration Regeneration
         // We regenerate settings.json for EVERY attempt to ensure that fallback models
         // are correctly propagated to the Gemini CLI.
@@ -2553,7 +2561,17 @@ app.post("/v1/chat/completions", handleUpload, async (req, res) => {
           } else if (err.reason === "zero_output" && zeroOutputRetries < MAX_ZERO_OUTPUT_RETRIES) {
             zeroOutputRetries++;
             shouldRetry = true;
-            console.log(`[API] [Turn ${activeTurnId}] Unified Retry: Zero Output (Attempt ${zeroOutputRetries}/${MAX_ZERO_OUTPUT_RETRIES})`);
+            
+            // [IONOSPHERE] Zero-Output Failover Logic
+            // If the model is producing thoughts but no content, it's likely a model-specific
+            // failure (safety or complexity). Try the next model in the ladder if available.
+            if (modelQueue.length > 0) {
+              const oldModel = responseModel;
+              responseModel = modelQueue.shift();
+              console.log(`[API] [Turn ${activeTurnId}] Unified Retry: Zero Output Fallback (${zeroOutputRetries}/${MAX_ZERO_OUTPUT_RETRIES}). Switching: ${oldModel} -> ${responseModel}`);
+            } else {
+              console.log(`[API] [Turn ${activeTurnId}] Unified Retry: Zero Output (Attempt ${zeroOutputRetries}/${MAX_ZERO_OUTPUT_RETRIES})`);
+            }
           } else if (err.isRepetitionKill && repetitionRetries < MAX_REPETITION_RETRIES) {
             repetitionRetries++;
             shouldRetry = true;
