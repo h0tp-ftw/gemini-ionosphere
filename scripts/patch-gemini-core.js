@@ -1039,11 +1039,16 @@ if (fs.existsSync(envContextTarget)) {
 
   // 13a. Patch getEnvironmentContext variables to allow env overrides
   const contextVarsSearch = /const today = new Date\(\)\.toLocaleDateString\(undefined, \{[\s\S]*?const tempDir = config\.storage\.getProjectTempDir\(\);/;
-  const contextVarsReplace = `const today = process.env.IONOSPHERE_DATE || new Date().toLocaleDateString(undefined, {
+  const contextVarsReplace = `const today = process.env.IONOSPHERE_DATE || new Date().toLocaleString(process.env.IONOSPHERE_LOCALE || undefined, {
         weekday: 'long',
         year: 'numeric',
         month: 'long',
         day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        timeZoneName: 'short',
+        timeZone: process.env.IONOSPHERE_TIMEZONE || undefined
     });
     const platform = process.env.IONOSPHERE_PLATFORM || process.platform;
     let directoryContext = '';
@@ -1057,8 +1062,18 @@ if (fs.existsSync(envContextTarget)) {
   if (content.includes("const today =") && !content.includes("IONOSPHERE_PLATFORM")) {
     content = content.replace(contextVarsSearch, contextVarsReplace);
     console.log("  - Applied session context environment overrides (Platform, TempDir, Date, DirContext).");
-  } else if (content.includes("IONOSPHERE_PLATFORM")) {
-    console.log("  - Session context environment overrides already applied.");
+  } else if (content.includes("IONOSPHERE_PLATFORM") && !content.includes("IONOSPHERE_LOCALE")) {
+    console.log("  - Upgrading session context environment overrides to include Locale and Timezone...");
+    // Use a more relaxed regex to find the already-patched block
+    const patchedVarsSearch = /const today = process\.env\.IONOSPHERE_DATE \|\| new Date\(\)\.toLocaleDateString\(undefined, \{[\s\S]*?const tempDir = process\.env\.IONOSPHERE_TEMP_DIR \|\| config\.storage\.getProjectTempDir\(\);/;
+    if (content.match(patchedVarsSearch)) {
+      content = content.replace(patchedVarsSearch, contextVarsReplace);
+      console.log("  - Upgrade applied successfully.");
+    } else {
+      console.warn("  - WARNING: Could not find session context patch upgrade anchor. Manual check required.");
+    }
+  } else if (content.includes("IONOSPHERE_LOCALE")) {
+    console.log("  - Session context environment overrides (including Locale) already applied.");
   }
 
   fs.writeFileSync(envContextTarget, content, "utf8");
