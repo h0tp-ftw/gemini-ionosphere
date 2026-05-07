@@ -111,7 +111,9 @@ temp/
     │   └── settings.json       ← per-request CLI configuration
     ├── image_1.png             ← decoded base64 images
     ├── tools.json              ← OpenAI tool definitions
-    └── tool_ipc.sock           ← Unix socket for ToolBridge IPC
+    └── forensics.log           ← Detailed turn-level diagnostics
+
+Note: Unix domain sockets are created in `/tmp` (or `IONOSPHERE_IPC_DIR`) to ensure filesystem compatibility across different host mount types.
 ```
 
 - **GC**: A sweeper deletes directories older than 15 minutes that are NOT currently parked.
@@ -128,6 +130,7 @@ temp/
 | `GEMINI_CLI_PATH` | `gemini` | Path/command to invoke the Gemini CLI |
 | `GEMINI_MODEL` | `gemini-2.5-flash-lite` | Default model |
 | `MAX_CONCURRENT_CLI` | `5` | Max simultaneous CLI processes |
+| `IONOSPHERE_IPC_DIR` | `/tmp` | Directory for Unix domain sockets (Linux/macOS) |
 
 ---
 

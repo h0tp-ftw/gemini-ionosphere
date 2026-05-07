@@ -3,6 +3,7 @@ import express from "express";
 import cors from "cors";
 import multer from "multer";
 import net from "net";
+import os from "os";
 import { GeminiController } from "./GeminiController.js";
 import fs from "fs";
 import path from "path";
@@ -2146,11 +2147,20 @@ app.post("/v1/chat/completions", handleUpload, async (req, res) => {
     timer.addMeta('promptChars', (conversationPromptSection || conversationPrompt).length);
 
     timer.mark('ipc_setup');
-    // Per-turn IPC: Use /tmp for Unix sockets to avoid host-mount incompatibilities (ENOTSUP)
+    // Per-turn IPC: Use os.tmpdir() or IONOSPHERE_IPC_DIR for Unix sockets
+    // Avoid host-mount incompatibilities (ENOTSUP) by preferring a local temporary directory.
+    const ipcDir = process.env.IONOSPHERE_IPC_DIR || os.tmpdir();
+    if (!fs.existsSync(ipcDir)) {
+      try {
+        fs.mkdirSync(ipcDir, { recursive: true });
+      } catch (err) {
+        console.error(`[IPC] Failed to create IPC directory ${ipcDir}: ${err.message}`);
+      }
+    }
     const ipcPath =
       process.platform === "win32"
         ? `\\\\.\\pipe\\ionosphere-${activeTurnId}`
-        : path.join("/tmp", `ionosphere-${activeTurnId}.sock`);
+        : path.join(ipcDir, `ionosphere-${activeTurnId}.sock`);
 
     const ipcServer = net.createServer((socket) => {
       if (process.env.GEMINI_DEBUG_IPC === "true") {

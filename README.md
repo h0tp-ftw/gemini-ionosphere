@@ -103,6 +103,7 @@ Ionosphere requires two layers of authentication:
 | `GEMINI_MODEL` | `gemini-2.5-flash-lite` | Default model if none is specified in the request. |
 | `MAX_CONCURRENT_CLI` | `5` | Maximum number of simultaneous CLI processes. |
 | `PORT` | `3000` | Port for the Express server. |
+| `IONOSPHERE_IPC_DIR` | `/tmp` | Directory for Unix domain sockets (Linux/macOS). |
 
 ---
 
