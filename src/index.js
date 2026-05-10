@@ -2713,9 +2713,16 @@ app.post("/v1/chat/completions", handleUpload, async (req, res) => {
   } catch (err) {
     if (heartbeatInterval) clearInterval(heartbeatInterval);
     if (parkDebounceTimer) clearTimeout(parkDebounceTimer);
-    console.error(
-      `[API Error] Critical failure in /v1/chat/completions: ${err.stack || err.message}`,
-    );
+
+    if (err instanceof RetryableError) {
+      console.error(
+        `[API Error] Final failure after retries: ${err.message} (Reason: ${err.reason})`,
+      );
+    } else {
+      console.error(
+        `[API Error] Critical failure in /v1/chat/completions: ${err.stack || err.message}`,
+      );
+    }
     const errorObj = formatErrorResponse(err);
     if (!res.headersSent) {
       res.status(getStatusCode(errorObj)).json({ error: errorObj });
