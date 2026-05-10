@@ -1760,10 +1760,10 @@ app.post("/v1/chat/completions", handleUpload, async (req, res) => {
             await new Promise((r) => setTimeout(r, 50));
           }
 
+          const pendingForThisTurn = Array.from(pendingToolCalls.entries())
+            .filter(([_, p]) => p.turnId === hijackedTurnId);
+
           if (process.env.GEMINI_DEBUG_HANDOFF === "true") {
-            const pendingForThisTurn = Array.from(pendingToolCalls.entries())
-              .filter(([_, p]) => p.turnId === hijackedTurnId);
-            
             console.log(
               `[FORENSICS] Handoff scanRange (last 20): ${JSON.stringify(
                 scanRange.map((m) => ({
