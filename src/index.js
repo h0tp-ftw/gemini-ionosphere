@@ -2304,18 +2304,25 @@ app.post("/v1/chat/completions", handleUpload, async (req, res) => {
       ipcServer.listen(ipcPath, () => resolve());
     });
 
-    // Write raw request JSON and prompt for offline forensics
+    // Write raw request JSON and prompt to the active workspace for live viewing
+    const workspaceRequestPath = path.join(turnTempDir, "request.json");
+    const workspacePromptPath = path.join(turnTempDir, "serialized_prompt.txt");
+    
+    const writePromises = [
+      fs.promises.writeFile(workspaceRequestPath, JSON.stringify(req.body, null, 2)),
+      fs.promises.writeFile(workspacePromptPath, (conversationPromptSection || conversationPrompt).trim())
+    ];
+
+    // Also write to flat debug_prompts directory for persistent forensics if enabled
     if (process.env.GEMINI_SAVE_DEBUG_FILES === "true" || process.env.GEMINI_DEBUG_PROMPTS === "true") {
       const debugDir = path.join(process.cwd(), "debug_prompts");
-      await fs.promises.writeFile(
-        path.join(debugDir, `request-${activeTurnId}.json`),
-        JSON.stringify(req.body, null, 2),
-      );
-      await fs.promises.writeFile(
-        path.join(debugDir, `prompt-${activeTurnId}.txt`),
-        (conversationPromptSection || conversationPrompt).trim(),
+      writePromises.push(
+        fs.promises.writeFile(path.join(debugDir, `request-${activeTurnId}.json`), JSON.stringify(req.body, null, 2)),
+        fs.promises.writeFile(path.join(debugDir, `prompt-${activeTurnId}.txt`), (conversationPromptSection || conversationPrompt).trim())
       );
     }
+    
+    await Promise.all(writePromises);
 
     // Config and Generation moved into the retry loop to support dynamic fallback ladders.
 
