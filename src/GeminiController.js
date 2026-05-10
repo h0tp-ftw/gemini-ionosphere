@@ -468,7 +468,9 @@ export class GeminiController extends EventEmitter {
                }
                console.error(diagLines.join('\n'));
                console.error(`[GeminiController] [Turn ${turnId}] STALL: No output from CLI for ${dynamicStallTimeout}ms. Killing process.`);
-               console.log(`[TTFB_DATA] turn=${turnId} ttfb_ms=STALL(${dynamicStallTimeout}) chars=${p?._promptChars || 0} tokens_est=${p?._estimatedTokens || 0} messages=${p?._messageCount || 0} concurrent=${this.processes.size}`);
+               if (process.env.GEMINI_PERF_TIMING === "true") {
+                 console.log(`[TTFB_DATA] turn=${turnId} ttfb_ms=STALL(${dynamicStallTimeout}) chars=${p?._promptChars || 0} tokens_est=${p?._estimatedTokens || 0} messages=${p?._messageCount || 0} concurrent=${this.processes.size}`);
+               }
                if (p) {
                  p.isStallKill = true;
                  p.kill("SIGKILL");
@@ -550,8 +552,10 @@ export class GeminiController extends EventEmitter {
               proc.currentPhase = "responding";
               if (proc._earlyStallCheck) clearTimeout(proc._earlyStallCheck);
               const startupDuration = proc.firstByteTime - (proc.spawnStartTime || Date.now());
-              console.log(`[GeminiController] [Turn ${turnId}] First byte received (TTFB) after ${startupDuration}ms`);
-              console.log(`[TTFB_DATA] turn=${turnId} ttfb_ms=${startupDuration} chars=${proc._promptChars || 0} tokens_est=${proc._estimatedTokens || 0} messages=${proc._messageCount || 0} concurrent=${this.processes.size}`);
+              if (process.env.GEMINI_PERF_TIMING === "true") {
+                console.log(`[GeminiController] [Turn ${turnId}] First byte received (TTFB) after ${startupDuration}ms`);
+                console.log(`[TTFB_DATA] turn=${turnId} ttfb_ms=${startupDuration} chars=${proc._promptChars || 0} tokens_est=${proc._estimatedTokens || 0} messages=${proc._messageCount || 0} concurrent=${this.processes.size}`);
+              }
             }
             const lines = chunk.toString().split("\n");
             for (const line of lines) {
@@ -1036,7 +1040,9 @@ export class GeminiController extends EventEmitter {
             if (lastStderrLines.length > 5) lastStderrLines.shift();
 
             const activeCallbacks = this.callbacksByTurn.get(turnId) || {};
-            console.error(`[Gemini CLI STDERR] [Turn ${turnId}] ${stderrText}`);
+            if (process.env.GEMINI_DEBUG_RAW === "true") {
+              console.error(`[Gemini CLI STDERR] [Turn ${turnId}] ${stderrText}`);
+            }
 
             const errorResult = this.errorParser.parseStderr(
               stderrText,

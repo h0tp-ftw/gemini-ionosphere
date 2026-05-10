@@ -893,7 +893,9 @@ app.post("/v1/chat/completions", handleUpload, async (req, res) => {
           const targetProc = hijackedTurnId ? controller.processes.get(hijackedTurnId) : controller.processes.get(activeTurnId);
           const phase = targetProc?.currentPhase || "unknown";
           const statusSuffix = ` (Phase: ${phase}, Alive: ${!!targetProc})`;
-          console.log(`[Turn ${activeTurnId}] Still waiting for model response (elapsed: ${elapsed}s)...${hijackContext}${statusSuffix}`);
+          if (process.env.GEMINI_DEBUG_HANDOFF === "true") {
+            console.log(`[Turn ${activeTurnId}] Still waiting for model response (elapsed: ${elapsed}s)...${hijackContext}${statusSuffix}`);
+          }
           res.write(`: heartbeat\n\n`);
         } else {
           clearInterval(heartbeatInterval);
@@ -2263,7 +2265,9 @@ app.post("/v1/chat/completions", handleUpload, async (req, res) => {
                   responseModel: responseModel
                 };
                 parkedTurns.set(activeTurnId, parkedInfo);
-                console.log(`[TRACE] IPC: EMITTING parked:${activeTurnId}`);
+                if (process.env.GEMINI_DEBUG_IPC === "true") {
+                  console.log(`[TRACE] IPC: EMITTING parked:${activeTurnId}`);
+                }
                 // Notify any pending Wait-and-Hijack waiters
                 controller.emit(`parked:${activeTurnId}`, parkedInfo);
               } else if (!WARM_HANDOFF_ENABLED) {
