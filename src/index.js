@@ -538,8 +538,12 @@ app.post("/v1/chat/completions", handleUpload, async (req, res) => {
   let parkDebounceTimer = null;
   const timer = new PerfTimer("pending", {});
   let isStreaming = false;
+  let activeTurnId = req.turnId || randomUUID();
+  let turnTempDir = path.join(baseTempDir, activeTurnId);
+  let pendingRetry = false;
 
   try {
+    timer.turnId = activeTurnId;
     timer.mark('ingress');
     // 1. Authorization
     const expectedApiKey = process.env.API_KEY;
@@ -635,10 +639,8 @@ app.post("/v1/chat/completions", handleUpload, async (req, res) => {
     }
 
     // --- TURN IDENTITY ---
-    const activeTurnId = req.turnId || randomUUID();
     timer.turnId = activeTurnId;
 
-    const turnTempDir = path.join(baseTempDir, activeTurnId); // Needed early for parsed logger
     const settingsPath = path.join(turnTempDir, ".gemini", "settings.json");
 
     const logForensics = (data) => {
@@ -2315,7 +2317,6 @@ app.post("/v1/chat/completions", handleUpload, async (req, res) => {
     let repetitionRetries = 0;
     let retryZeroOutput = false; 
     let shouldRetry = false;
-    let pendingRetry = false;
 
 
     const executeTask = async () => {
@@ -2728,6 +2729,18 @@ app.post("/v1/chat/completions", handleUpload, async (req, res) => {
     }
     timer.addMeta('error', err.message || 'unknown');
     timer.finish();
+  } finally {
+    // Global safety cleanup: purge turn workspace if it's not parked and not retrying
+    if (activeTurnId && !parkedTurns.has(activeTurnId) && !pendingRetry) {
+      if (process.env.GEMINI_DEBUG_KEEP_TEMP !== "true" && fs.existsSync(turnTempDir)) {
+        console.log(`[Turn ${activeTurnId}] Handler exiting. Performing top-level workspace cleanup.`);
+        try {
+          fs.rmSync(turnTempDir, { recursive: true, force: true });
+        } catch (e) {
+          console.error(`[Turn ${activeTurnId}] Failed to cleanup workspace in finally block:`, e.message);
+        }
+      }
+    }
   }
 });
 
