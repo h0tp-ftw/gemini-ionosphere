@@ -1733,24 +1733,26 @@ app.post("/v1/chat/completions", handleUpload, async (req, res) => {
             await new Promise((r) => setTimeout(r, 50));
           }
 
-          const pendingForThisTurn = Array.from(pendingToolCalls.entries())
-            .filter(([_, p]) => p.turnId === hijackedTurnId);
-          
-          console.log(
-            `[FORENSICS] Handoff scanRange (last 20): ${JSON.stringify(
-              scanRange.map((m) => ({
-                role: m.role,
-                tool_id: m.tool_call_id,
-                name: m.name, // For older OpenAI/function roles
-                contentSnippet: typeof m.content === "string" ? m.content.substring(0, 30) : "obj"
-              })),
-              null,
-              2,
-            )}`,
-          );
-          console.log(
-            `[FORENSICS] Pending tools for turn ${hijackedTurnId}: ${pendingForThisTurn.map(([k, p]) => `${k} (${p.clientName})`).join(', ') || 'none'}`,
-          );
+          if (process.env.GEMINI_DEBUG_HANDOFF === "true") {
+            const pendingForThisTurn = Array.from(pendingToolCalls.entries())
+              .filter(([_, p]) => p.turnId === hijackedTurnId);
+            
+            console.log(
+              `[FORENSICS] Handoff scanRange (last 20): ${JSON.stringify(
+                scanRange.map((m) => ({
+                  role: m.role,
+                  tool_id: m.tool_call_id,
+                  name: m.name, // For older OpenAI/function roles
+                  contentSnippet: typeof m.content === "string" ? m.content.substring(0, 30) : "obj"
+                })),
+                null,
+                2,
+              )}`,
+            );
+            console.log(
+              `[FORENSICS] Pending tools for turn ${hijackedTurnId}: ${pendingForThisTurn.map(([k, p]) => `${k} (${p.clientName})`).join(', ') || 'none'}`,
+            );
+          }
 
 
           // First pass: look for AUTHENTIC tool results
@@ -1788,7 +1790,9 @@ app.post("/v1/chat/completions", handleUpload, async (req, res) => {
               if (shortKey) {
                 for (const [callKey, pending] of pendingToolCalls.entries()) {
                   // FORCED LOGGING
-                  console.log(`[IPC] Comparing pending callKey=${callKey} with shortKey=${shortKey}`);
+                  if (process.env.GEMINI_DEBUG_HANDOFF === "true") {
+                    console.log(`[IPC] Comparing pending callKey=${callKey} with shortKey=${shortKey}`);
+                  }
 
                   // [IONOSPHERE] Broad Match: check if the callKey contains the shortKey or vice-versa
                   // Also added contentHash fallback match (experimental)
@@ -1819,9 +1823,11 @@ app.post("/v1/chat/completions", handleUpload, async (req, res) => {
                           );
                           const match = nextContent.match(narrationPattern);
                           if (match && match[1]) {
-                            console.log(
-                              `[API] Deep-scan match (Narrated): Extracted result for ${callId} from USER narration: "${match[1].substring(0, 100).replace(/\n/g, " ")}..."`,
-                            );
+                            if (process.env.GEMINI_DEBUG_HANDOFF === "true") {
+                              console.log(
+                                `[API] Deep-scan match (Narrated): Extracted result for ${callId} from USER narration: "${match[1].substring(0, 100).replace(/\n/g, " ")}..."`,
+                              );
+                            }
                             resultData = match[1].trim();
                           }
                         }
@@ -1837,9 +1843,11 @@ app.post("/v1/chat/completions", handleUpload, async (req, res) => {
                       continue;
                     }
 
-                    console.log(
-                      `[API] Deep-scan match: Resolving ${callId || 'fuzzy'} (Tool: ${pending.name}) for turn ${hijackedTurnId}`,
-                    );
+                    if (process.env.GEMINI_DEBUG_HANDOFF === "true") {
+                      console.log(
+                        `[API] Deep-scan match: Resolving ${callId || 'fuzzy'} (Tool: ${pending.name}) for turn ${hijackedTurnId}`,
+                      );
+                    }
                     logForensics(`HANDOFF: Deep-scan matched callId ${callId || 'fuzzy'} (Tool: ${pending.name}). Resolving.`);
                     resolveToolCall(callKey, resultData);
                     resolvedAny = true;
@@ -1856,7 +1864,9 @@ app.post("/v1/chat/completions", handleUpload, async (req, res) => {
                   if (pending.turnId === hijackedTurnId) {
                     // If the tool name matches or we only have ONE tool pending anyway, treat it as a match
                     if (pendingForThisTurn.length === 1 || (toolNameFromMsg && pending.clientName === toolNameFromMsg)) {
-                       console.log(`[API] Deep-scan Fuzzy Match: Matching by name/order for ${pending.clientName}`);
+                       if (process.env.GEMINI_DEBUG_HANDOFF === "true") {
+                         console.log(`[API] Deep-scan Fuzzy Match: Matching by name/order for ${pending.clientName}`);
+                       }
                        resolveToolCall(callKey, resultData);
                        resolvedAny = true;
                        break;

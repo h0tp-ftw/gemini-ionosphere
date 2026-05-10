@@ -63,9 +63,11 @@ export class RepetitionBreaker {
 
     // Grace window: allow the first N retries without escalation
     if (entry.count <= graceCount) {
-      console.log(
-        `[RepetitionBreaker] [RETRY] Tool '${toolName}' retry ${entry.count}/${graceCount} (grace period). Allowing.`,
-      );
+      if (process.env.GEMINI_DEBUG_REPETITION === "true") {
+        console.log(
+          `[RepetitionBreaker] [RETRY] Tool '${toolName}' retry ${entry.count}/${graceCount} (grace period). Allowing.`,
+        );
+      }
       return false;
     }
 
