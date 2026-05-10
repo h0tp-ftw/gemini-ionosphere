@@ -2148,11 +2148,14 @@ app.post("/v1/chat/completions", handleUpload, async (req, res) => {
       conversationPromptSection += "ASSISTANT: ";
     }
 
-    // Debug Persistence: Create directory if needed
-    if (process.env.GEMINI_DEBUG_PROMPTS !== "false") {
-      const debugDir = path.join(process.cwd(), "debug_prompts");
-      if (!fs.existsSync(debugDir))
-        await fs.promises.mkdir(debugDir, { recursive: true });
+    // Ensure flat debug directory exists for request/prompt forensics
+    const debugDir = path.join(process.cwd(), "debug_prompts");
+    if (!fs.existsSync(debugDir)) {
+      try {
+        fs.mkdirSync(debugDir, { recursive: true });
+      } catch (e) {
+        console.error(`[API] Failed to create debug_prompts directory:`, e.message);
+      }
     }
 
     timer.measure('new_turn_setup');
@@ -2301,14 +2304,15 @@ app.post("/v1/chat/completions", handleUpload, async (req, res) => {
       ipcServer.listen(ipcPath, () => resolve());
     });
 
-    // Write raw request JSON for offline forensics
-    if (process.env.GEMINI_DEBUG_PROMPTS !== "false") {
+    // Write raw request JSON and prompt for offline forensics
+    if (process.env.GEMINI_SAVE_DEBUG_FILES === "true" || process.env.GEMINI_DEBUG_PROMPTS === "true") {
+      const debugDir = path.join(process.cwd(), "debug_prompts");
       await fs.promises.writeFile(
-        path.join(turnTempDir, "request.json"),
+        path.join(debugDir, `request-${activeTurnId}.json`),
         JSON.stringify(req.body, null, 2),
       );
       await fs.promises.writeFile(
-        path.join(turnTempDir, "serialized_prompt.txt"),
+        path.join(debugDir, `prompt-${activeTurnId}.txt`),
         (conversationPromptSection || conversationPrompt).trim(),
       );
     }
