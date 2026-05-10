@@ -1176,6 +1176,7 @@ export class GeminiController extends EventEmitter {
           } else {
             const diagnostics = lastStderrLines.join("\n").trim();
             const errorMsg = diagnostics ? `CLI failed (code ${code}): ${diagnostics}` : `CLI process exited with code ${code}`;
+            console.error(`[GeminiController] [Turn ${turnId}] ${errorMsg}`);
             // Heuristic for quota or transient backend errors in generic failures
             if (/429|Quota|Capacity|500|Internal|backendError/i.test(errorMsg)) {
               reject(new RetryableError(errorMsg, "quota", 0, false, false, true, proc.pendingRetryAfterMs || null));
