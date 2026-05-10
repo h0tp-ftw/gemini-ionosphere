@@ -542,6 +542,19 @@ app.post("/v1/chat/completions", handleUpload, async (req, res) => {
   let turnTempDir = path.join(baseTempDir, activeTurnId);
   let pendingRetry = false;
 
+  // Retry and State Tracking
+  const MAX_QUOTA_RETRIES = 5;
+  const MAX_STALL_RETRIES = 5;
+  const MAX_ZERO_OUTPUT_RETRIES = 3;
+  const MAX_REPETITION_RETRIES = 2;
+
+  let quotaRetries = 0;
+  let stallRetries = 0;
+  let zeroOutputRetries = 0;
+  let repetitionRetries = 0;
+  let retryZeroOutput = false; 
+  let shouldRetry = false;
+
   try {
     timer.turnId = activeTurnId;
     timer.mark('ingress');
@@ -2327,17 +2340,7 @@ app.post("/v1/chat/completions", handleUpload, async (req, res) => {
     // Config and Generation moved into the retry loop to support dynamic fallback ladders.
 
 
-    const MAX_QUOTA_RETRIES = 5;
-    const MAX_STALL_RETRIES = 5;
-    const MAX_ZERO_OUTPUT_RETRIES = 3;
-    const MAX_REPETITION_RETRIES = 2;
-
-    let quotaRetries = 0;
-    let stallRetries = 0;
-    let zeroOutputRetries = 0;
-    let repetitionRetries = 0;
-    let retryZeroOutput = false; 
-    let shouldRetry = false;
+    // Retry loop context initialization
 
 
     const executeTask = async () => {
