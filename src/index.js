@@ -1641,6 +1641,18 @@ app.post("/v1/chat/completions", handleUpload, async (req, res) => {
         console.log(`[API] [Turn ${activeTurnId}] Restored model ladder from hijacked turn ${hijackedTurnId}: ${responseModel} (Remaining: ${modelQueue.length} models)`);
       }
 
+      // [IONOSPHERE] Restore accumulated state (text, reasoning, tools) from the hijacked turn.
+      // This prevents "Zero Output" false-positives and ensures continuity for the client.
+      if (parked.accumulatedText) accumulatedText = parked.accumulatedText;
+      if (parked.accumulatedReasoning) accumulatedReasoning = parked.accumulatedReasoning;
+      if (parked.accumulatedToolCalls) accumulatedToolCalls = [...parked.accumulatedToolCalls];
+      if (parked.accumulatedCitations) accumulatedCitations = [...parked.accumulatedCitations];
+      if (parked.cliFinishReason) cliFinishReason = parked.cliFinishReason;
+      
+      if (process.env.GEMINI_DEBUG_HANDOFF === "true") {
+        console.log(`[API] [Turn ${activeTurnId}] Restored state from hijacked turn ${hijackedTurnId}: textLen=${accumulatedText.length}, tools=${accumulatedToolCalls.length}`);
+      }
+
       const proc = controller.processes.get(hijackedTurnId);
 
       if (!proc || proc.killed) {
@@ -1949,7 +1961,7 @@ app.post("/v1/chat/completions", handleUpload, async (req, res) => {
               break;
             }
           }
-          if (!reemitted) {
+          if (!reemitted && !resolvedAny) {
             console.warn(
               `[API] Proxy Hijack: No pending tool call found for Turn ${hijackedTurnId}. Falling back.`,
             );
@@ -1957,13 +1969,17 @@ app.post("/v1/chat/completions", handleUpload, async (req, res) => {
             hijackedTurnId = null;
             // Fall through to NEW TURN CASE
           } else {
+            if (process.env.GEMINI_DEBUG_HANDOFF === "true" && !reemitted && resolvedAny) {
+              console.log(`[API] Proxy Hijack: Turn ${hijackedTurnId} successfully resumed via history scan.`);
+            }
             timer.measure('handoff');
-            timer.addMeta('path', 're-emit');
+            timer.addMeta('path', reemitted ? 're-emit' : 'history-resolution');
             timer.finish();
             if (process.env.GEMINI_DEBUG_KEEP_TEMP !== "true" && fs.existsSync(turnTempDir)) {
               fs.rmSync(turnTempDir, { recursive: true, force: true });
             }
-            return; // Request handled by re-emit
+            if (reemitted) return; // Request handled by re-emit
+            // If resolvedAny, fall through to await parked.executePromise below
           }
 
           // 3. Await the conclusion of the TASK from the new request side
@@ -2262,19 +2278,35 @@ app.post("/v1/chat/completions", handleUpload, async (req, res) => {
                   },
                   historyHash,
                   modelQueue: [...modelQueue], // Preserve the current ladder state
-                  responseModel: responseModel
+                  responseModel: responseModel,
+                  // [IONOSPHERE] Store accumulated state for stateless handoff
+                  accumulatedText,
+                  accumulatedReasoning,
+                  accumulatedToolCalls: [...accumulatedToolCalls],
+                  accumulatedCitations: [...accumulatedCitations],
+                  cliFinishReason
                 };
-                parkedTurns.set(activeTurnId, parkedInfo);
-                if (process.env.GEMINI_DEBUG_IPC === "true") {
-                  console.log(`[TRACE] IPC: EMITTING parked:${activeTurnId}`);
+                  parkedTurns.set(activeTurnId, parkedInfo);
+                  if (process.env.GEMINI_DEBUG_IPC === "true") {
+                    console.log(`[TRACE] IPC: EMITTING parked:${activeTurnId}`);
+                  }
+                  // Notify any pending Wait-and-Hijack waiters
+                  controller.emit(`parked:${activeTurnId}`, parkedInfo);
+                } else if (!WARM_HANDOFF_ENABLED) {
+                  console.log(
+                    `[Turn ${activeTurnId}] Cold Handoff: Skipping parking for tool call ${msg.name}`,
+                  );
+                } else {
+                  // [IONOSPHERE] Refresh state on existing parked turn
+                  const parked = parkedTurns.get(activeTurnId);
+                  if (parked) {
+                    parked.accumulatedText = accumulatedText;
+                    parked.accumulatedReasoning = accumulatedReasoning;
+                    parked.accumulatedToolCalls = [...accumulatedToolCalls];
+                    parked.accumulatedCitations = [...accumulatedCitations];
+                    parked.cliFinishReason = cliFinishReason;
+                  }
                 }
-                // Notify any pending Wait-and-Hijack waiters
-                controller.emit(`parked:${activeTurnId}`, parkedInfo);
-              } else if (!WARM_HANDOFF_ENABLED) {
-                console.log(
-                  `[Turn ${activeTurnId}] Cold Handoff: Skipping parking for tool call ${msg.name}`,
-                );
-              }
 
               // Trigger dispatcher
               const callbacks = controller.callbacksByTurn.get(activeTurnId);
