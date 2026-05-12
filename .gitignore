@@ -39,3 +39,6 @@ debug_prompts/
 # Multi-instance generated files
 .env.instance-*
 docker-compose.multi.yml
+
+# Live deployment info
+ENDPOINTS.md

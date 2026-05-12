@@ -156,11 +156,16 @@ function generateEnvFile(instance, globalPrefs) {
         `PORT=${instance.port}`,
         `MAX_CONCURRENT_CLI=${instance.maxCli}`,
         ``,
-        `# --- Google Auth ---
-GEMINI_AUTH_TYPE=${instance.authMethod === 'oauth' ? 'oauth-personal' : 'gemini-api-key'}
-${instance.authMethod === 'oauth' ? 'GOOGLE_GENAI_USE_GCA=true' : ''}
-${instance.apiKey ? `GEMINI_API_KEY=${instance.apiKey}` : ''}
-`.split('\n').filter(l => l.trim() !== ''),
+    ];
+
+    // Google Auth block
+    lines.push(
+        `# --- Google Auth ---`,
+        `GEMINI_AUTH_TYPE=${instance.authMethod === 'oauth' ? 'oauth-personal' : 'gemini-api-key'}`,
+        ...(instance.authMethod === 'oauth' ? [`GOOGLE_GENAI_USE_GCA=true`] : []),
+        ...(instance.apiKey ? [`GEMINI_API_KEY=${instance.apiKey}`] : []),
+        ``,
+    );
 
     lines.push(
         ``,
@@ -187,7 +192,7 @@ ${instance.apiKey ? `GEMINI_API_KEY=${instance.apiKey}` : ''}
     return lines.join('\n');
 }
 
-function generateComposeFile(instances) {
+function generateComposeFile(instances, useNginx = false) {
     // Build the YAML manually to keep it clean and readable
     const lines = [
         `# Ionosphere Multi-Instance Compose File`,
@@ -204,6 +209,9 @@ function generateComposeFile(instances) {
         ``,
         `services:`,
     ];
+
+    // When nginx is the public face, bind ports to localhost only for security.
+    const portBinding = (port) => useNginx ? `127.0.0.1:${port}:${port}` : `${port}:${port}`;
 
     for (const inst of instances) {
         const serviceName = `ionosphere-${inst.name}`;
@@ -227,7 +235,7 @@ function generateComposeFile(instances) {
             `      - ${envFile}`,
             `    command: node src/index.js`,
             `    ports:`,
-            `      - "${inst.port}:${inst.port}"`,
+            `      - "${portBinding(inst.port)}"`,
             `    volumes:`,
             `      - ${volumeName}:/root/.gemini`,
             `      - ${tempDir}:/app/temp`,
@@ -239,6 +247,128 @@ function generateComposeFile(instances) {
         lines.push(`  gemini-config-${inst.name}:`);
     }
     lines.push(``);
+
+    return lines.join('\n');
+}
+
+// ─── Nginx Config Generator ───────────────────────────────────────────────────
+
+function generateNginxConfig(instances, nginxPrefs) {
+    const { hostname, routingMode, selfSigned } = nginxPrefs;
+
+    const certFile = selfSigned
+        ? `/etc/ssl/certs/ionosphere-selfsigned.crt`
+        : `/etc/letsencrypt/live/${hostname}/fullchain.pem`;
+    const keyFile = selfSigned
+        ? `/etc/ssl/private/ionosphere-selfsigned.key`
+        : `/etc/letsencrypt/live/${hostname}/privkey.pem`;
+
+    const proxyBlock = (port, indent = '        ') => [
+        `${indent}proxy_pass http://127.0.0.1:${port};`,
+        `${indent}proxy_http_version 1.1;`,
+        `${indent}proxy_set_header Host              $host;`,
+        `${indent}proxy_set_header X-Real-IP         $remote_addr;`,
+        `${indent}proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;`,
+        `${indent}proxy_set_header X-Forwarded-Proto $scheme;`,
+        `${indent}# SSE / streaming — must disable buffering`,
+        `${indent}proxy_buffering           off;`,
+        `${indent}proxy_cache               off;`,
+        `${indent}chunked_transfer_encoding on;`,
+        `${indent}# Allow long Ionosphere turns (3 min)`,
+        `${indent}proxy_read_timeout    300s;`,
+        `${indent}proxy_send_timeout    300s;`,
+        `${indent}proxy_connect_timeout  10s;`,
+    ].join('\n');
+
+    const sslLines = (listenPort = 443) => [
+        `    listen ${listenPort} ssl;`,
+        `    listen [::]:${listenPort} ssl;`,
+        `    ssl_certificate     ${certFile};`,
+        `    ssl_certificate_key ${keyFile};`,
+        `    ssl_protocols TLSv1.2 TLSv1.3;`,
+        `    ssl_prefer_server_ciphers on;`,
+        `    ssl_ciphers HIGH:!aNULL:!MD5;`,
+    ].join('\n');
+
+    const lines = [
+        `# Ionosphere — Nginx Reverse Proxy`,
+        `# Generated: ${new Date().toISOString()}`,
+        `# Host: ${hostname}`,
+        `#`,
+        `# Install (run as root/sudo):`,
+        `#   cp nginx-ionosphere.conf /etc/nginx/sites-available/ionosphere`,
+        `#   ln -sf /etc/nginx/sites-available/ionosphere /etc/nginx/sites-enabled/ionosphere`,
+        `#   nginx -t && systemctl reload nginx`,
+        `#`,
+        selfSigned ? [
+            `# Self-signed cert was selected. To generate it:`,
+            `#   openssl req -x509 -nodes -days 365 -newkey rsa:2048 \\`,
+            `#     -keyout /etc/ssl/private/ionosphere-selfsigned.key \\`,
+            `#     -out /etc/ssl/certs/ionosphere-selfsigned.crt \\`,
+            `#     -subj "/CN=${hostname}"`,
+        ].join('\n') : [
+            `# Let's Encrypt cert. If not yet issued:`,
+            `#   certbot --nginx -d ${hostname} --non-interactive --agree-tos --register-unsafely-without-email`,
+            `# Requires ports 80 & 443 open in your cloud firewall/security group.`,
+        ].join('\n'),
+        ``,
+        `# ── HTTP: ACME challenge + redirect ──────────────────────────────────────`,
+        `server {`,
+        `    listen 80;`,
+        `    listen [::]:80;`,
+        `    server_name ${hostname};`,
+        ``,
+        `    location /.well-known/acme-challenge/ {`,
+        `        root /var/www/html;`,
+        `    }`,
+        ``,
+        `    location / {`,
+        `        return 301 https://$host$request_uri;`,
+        `    }`,
+        `}`,
+    ];
+
+    if (routingMode === 'primary_only') {
+        const primary = instances[0];
+        lines.push(
+            ``,
+            `# ── HTTPS: ${primary.name} (primary) on port 443 ────────────────────────────`,
+            `server {`,
+            sslLines(443),
+            `    server_name ${hostname};`,
+            ``,
+            `    location / {`,
+            proxyBlock(primary.port),
+            `    }`,
+            `}`,
+        );
+        if (instances.length > 1) {
+            lines.push(
+                ``,
+                `# Note: only the primary instance (${primary.name}) is exposed publicly.`,
+                `# Other instances are localhost-only: ${instances.slice(1).map(i => `${i.name}:${i.port}`).join(', ')}`,
+            );
+        }
+    } else {
+        // multi-port: 443, 8443, 9443 ...
+        const httpsPorts = [443, 8443, 9443, 10443, 11443, 12443, 13443, 14443, 15443, 16443];
+        for (let i = 0; i < instances.length; i++) {
+            const inst = instances[i];
+            const httpsPort = httpsPorts[i] ?? (8000 + i);
+            lines.push(
+                ``,
+                `# ── HTTPS port ${httpsPort}: ${inst.name} ──────────────────────────────────────`,
+                `server {`,
+                sslLines(httpsPort),
+                `    server_name ${hostname};`,
+                ``,
+                `    location / {`,
+                proxyBlock(inst.port),
+                `    }`,
+                `}`,
+            );
+        }
+    }
 
     return lines.join('\n');
 }
@@ -338,6 +468,45 @@ async function main() {
         }
     ]);
 
+    // ── Nginx public exposure ──
+    const { enableNginx } = await inquirer.prompt([{
+        type: 'confirm',
+        name: 'enableNginx',
+        message: 'Expose publicly via Nginx reverse proxy? (generates nginx-ionosphere.conf)',
+        default: false
+    }]);
+
+    let nginxPrefs = null;
+    if (enableNginx) {
+        nginxPrefs = await inquirer.prompt([
+            {
+                type: 'input',
+                name: 'hostname',
+                message: 'Public hostname or IP-based sslip.io address\n  (e.g. 2001-db8--1.sslip.io or yourdomain.com):',
+                validate: (v) => v.trim().length > 0 ? true : 'Hostname is required'
+            },
+            {
+                type: 'list',
+                name: 'routingMode',
+                message: 'How to expose multiple instances?',
+                choices: [
+                    { name: 'Primary only  — first instance on 443, rest are localhost-only', value: 'primary_only' },
+                    { name: 'Multi-port   — each instance on its own HTTPS port (443, 8443, 9443…)', value: 'multi_port' },
+                ]
+            },
+            {
+                type: 'list',
+                name: 'selfSigned',
+                message: 'TLS certificate:',
+                choices: [
+                    { name: "Self-signed (works now, clients need --insecure or cert trust)", value: true },
+                    { name: "Let's Encrypt (requires ports 80 & 443 open in your cloud firewall)", value: false },
+                ]
+            }
+        ]);
+        nginxPrefs.hostname = nginxPrefs.hostname.trim();
+    }
+
     // ── Collect per-instance configs ──
     const instances = await collectInstances();
 
@@ -355,9 +524,17 @@ async function main() {
     }
 
     // Write docker-compose.multi.yml
-    const composeContent = generateComposeFile(instances);
+    const composeContent = generateComposeFile(instances, !!nginxPrefs);
     fs.writeFileSync(COMPOSE_OUTPUT, composeContent, 'utf-8');
     console.log(`  ✅ ${COMPOSE_OUTPUT}`);
+
+    // Write nginx config if requested
+    const NGINX_OUTPUT = 'nginx-ionosphere.conf';
+    if (nginxPrefs) {
+        const nginxContent = generateNginxConfig(instances, nginxPrefs);
+        fs.writeFileSync(NGINX_OUTPUT, nginxContent, 'utf-8');
+        console.log(`  ✅ ${NGINX_OUTPUT}`);
+    }
 
     // Create temp directories
     for (const inst of instances) {
@@ -375,6 +552,7 @@ async function main() {
         const additions = [];
         if (!gitignore.includes('.env.instance-')) additions.push('.env.instance-*');
         if (!gitignore.includes('docker-compose.multi.yml')) additions.push('docker-compose.multi.yml');
+        if (nginxPrefs && !gitignore.includes('nginx-ionosphere.conf')) additions.push('nginx-ionosphere.conf');
 
         if (additions.length > 0) {
             gitignore += `\n# Multi-instance generated files\n${additions.join('\n')}\n`;
@@ -435,8 +613,43 @@ async function main() {
     console.log(`  Restart one: ${composeCmd} -f ${COMPOSE_OUTPUT} restart ionosphere-<name>`);
     console.log(``);
 
-    for (const inst of instances) {
-        console.log(`  📡 ${inst.name}: http://localhost:${inst.port}/v1/chat/completions`);
+    if (nginxPrefs) {
+        const { hostname, routingMode } = nginxPrefs;
+        const httpsPorts = [443, 8443, 9443, 10443, 11443];
+        console.log(`  🌐 Public endpoints (via Nginx):`);
+        if (routingMode === 'primary_only') {
+            const primary = instances[0];
+            console.log(`  📡 ${primary.name}: https://${hostname}/v1/chat/completions`);
+            for (const inst of instances.slice(1)) {
+                console.log(`  📡 ${inst.name}: http://localhost:${inst.port}/v1/chat/completions  (localhost only)`);
+            }
+        } else {
+            for (let i = 0; i < instances.length; i++) {
+                const inst = instances[i];
+                const port = httpsPorts[i] ?? (8000 + i);
+                const portSuffix = port === 443 ? '' : `:${port}`;
+                console.log(`  📡 ${inst.name}: https://${hostname}${portSuffix}/v1/chat/completions`);
+            }
+        }
+        console.log(``);
+        console.log(`  📄 Nginx config: nginx-ionosphere.conf`);
+        console.log(`     Install: sudo cp nginx-ionosphere.conf /etc/nginx/sites-available/ionosphere`);
+        console.log(`              sudo ln -sf /etc/nginx/sites-available/ionosphere /etc/nginx/sites-enabled/ionosphere`);
+        console.log(`              sudo nginx -t && sudo systemctl reload nginx`);
+        if (!nginxPrefs.selfSigned) {
+            console.log(`  🔒 TLS cert: sudo certbot --nginx -d ${hostname} --non-interactive --agree-tos --register-unsafely-without-email`);
+            console.log(`     Requires ports 80 & 443 open in your cloud security group first.`);
+        } else {
+            console.log(`  🔒 Self-signed cert — generate once on the host:`);
+            console.log(`     sudo openssl req -x509 -nodes -days 365 -newkey rsa:2048 \\`);
+            console.log(`       -keyout /etc/ssl/private/ionosphere-selfsigned.key \\`);
+            console.log(`       -out /etc/ssl/certs/ionosphere-selfsigned.crt \\`);
+            console.log(`       -subj "/CN=${hostname}"`);
+        }
+    } else {
+        for (const inst of instances) {
+            console.log(`  📡 ${inst.name}: http://localhost:${inst.port}/v1/chat/completions`);
+        }
     }
 
     console.log(`\n💡 Use these endpoints in your OpenAI-compatible clients.`);
