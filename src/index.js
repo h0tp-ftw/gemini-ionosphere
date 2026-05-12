@@ -250,16 +250,17 @@ const quotaCooldowns = new Map();
  * Records a quota cooldown for a model.
  * @param {string} model - The model name that hit quota.
  * @param {number|null} retryAfterMs - How many ms until quota resets.
- *   If null, applies a conservative default cooldown (60s).
+ *   If null, applies a conservative default cooldown (10 mins).
  */
 function recordQuotaCooldown(model, retryAfterMs) {
-  if (!retryAfterMs) return; // No data = no cooldown (don't guess)
-  const expiresAt = Date.now() + retryAfterMs;
+  // [IONOSPHERE] Use provided delay or a default of 10 minutes
+  const effectiveRetryAfterMs = retryAfterMs || (10 * 60 * 1000);
+  const expiresAt = Date.now() + effectiveRetryAfterMs;
   const existing = quotaCooldowns.get(model);
   // Only extend cooldowns, never shorten them (idempotent for duplicate errors)
   if (existing && existing > expiresAt) return;
   quotaCooldowns.set(model, expiresAt);
-  console.log(`[QUOTA COOLDOWN] Model ${model} exhausted. Cooldown until ${new Date(expiresAt).toISOString()} (${Math.round(retryAfterMs / 1000)}s)`);
+  console.log(`[QUOTA COOLDOWN] Model ${model} exhausted. Cooldown until ${new Date(expiresAt).toISOString()} (${Math.round(effectiveRetryAfterMs / 1000)}s)`);
 }
 
 /**
