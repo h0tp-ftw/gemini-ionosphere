@@ -867,7 +867,7 @@ export class GeminiController extends EventEmitter {
               const textLen = (proc.accumulatedText || "").trim().length;
               
               console.log(
-                `[GeminiController] Turn ${turnId} Usage: In=${input_tokens || 0}, Out=${output_tokens || 0}, Total=${total_tokens || 0} (Content Chars: ${textLen})`,
+                `[GeminiController] Turn ${turnId} Usage: In=${input_tokens || 0}, Out=${output_tokens || 0}, Total=${total_tokens || 0} (Content Chars: ${textLen}, Finish: ${json.finish_reason || 'stop'})`,
               );
               
               if ((output_tokens || 0) === 0 || (output_tokens > 0 && textLen === 0)) {
@@ -918,7 +918,7 @@ export class GeminiController extends EventEmitter {
               const hasNoContent = ((json.stats?.output_tokens || 0) === 0 || (proc.accumulatedText || "").trim().length === 0) && (proc.toolUsage?.size || 0) === 0;
               
               if (json.status === "success" && hasNoContent) {
-                console.log(`[GeminiController] [Turn ${turnId}] Early exit for zero-content success to trigger immediate retry. Full Metadata: ${JSON.stringify(json)}`);
+                console.log(`[GeminiController] [Turn ${turnId}] Early exit for zero-content success to trigger immediate retry. FinishReason: ${json.finish_reason || 'stop'}. Full Metadata: ${JSON.stringify(json)}`);
                 proc.isZeroOutputSuccess = true;
                 proc.kill("SIGKILL");
               }
@@ -959,6 +959,7 @@ export class GeminiController extends EventEmitter {
             // [IONOSPHERE] Enhanced JSON Protocol: safety/content filter
             console.warn(`[GeminiController] [Turn ${turnId}] ⚠️ Safety block: ${json.reason || 'unknown reason'}. Details: ${JSON.stringify(json)}`);
             // Explicitly notify orchestrator that this was a safety refusal
+            proc.isSafetyBlock = true;
             if (activeCallbacks.onSafety) {
               activeCallbacks.onSafety(json);
             }

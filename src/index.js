@@ -1206,11 +1206,29 @@ app.post("/v1/chat/completions", handleUpload, async (req, res) => {
       // but they yielded NO text AND NO reasoning AND NO tool calls.
       const hasNoContent = (outTokens === 0 || (textLen === 0 && reasonLen === 0)) && toolCount === 0;
 
+      // [IONOSPHERE] Map CLI finish_reason (Gemini values) to OpenAI values
+      const mapFinishReason = (cliReason) => {
+        if (accumulatedToolCalls.length > 0) return 'tool_calls';
+        if (!cliReason) return 'stop';
+        const r = cliReason.toString().toUpperCase();
+        if (r === 'STOP' || r === 'END_TURN') return 'stop';
+        if (r === 'MAX_TOKENS' || r === 'MAX_OUTPUT_TOKENS') return 'length';
+        if (r === 'SAFETY' || r === 'BLOCKED_REASON_UNSPECIFIED' || r === 'BLOCKLIST' || r === 'PROHIBITED_CONTENT') return 'content_filter';
+        if (r === 'RECITATION') return 'content_filter';
+        return 'stop';
+      };
+      const resolvedFinishReason = mapFinishReason(cliFinishReason || json.finish_reason);
+
+      const proc = controller.processes.get(activeTurnId);
+      const isSafetyRefusal = resolvedFinishReason === 'content_filter' || (proc && proc.isSafetyBlock);
+
       // Case 2: Reactive Debugging Dump / Zero Output Retry
       if (hasNoContent) {
-        if (zeroOutputRetries < MAX_ZERO_OUTPUT_RETRIES) {
-          console.warn(`[API] [Turn ${activeTurnId}] WARNING: Zero Output Turn (outTokens: ${outTokens}, textLen: ${textLen}, reasonLen: ${reasonLen}, tools: ${toolCount}). Triggering seamless retry (${zeroOutputRetries + 1}/${MAX_ZERO_OUTPUT_RETRIES}). Dumping last 60 lines of raw CLI output for context:`);
-          const proc = controller.processes.get(activeTurnId);
+        if (isSafetyRefusal) {
+          console.error(`[API] [Turn ${activeTurnId}] Content Policy Refusal detected (FinishReason: ${resolvedFinishReason}). Suppressing retries.`);
+          retryZeroOutput = false;
+        } else if (zeroOutputRetries < MAX_ZERO_OUTPUT_RETRIES) {
+          console.warn(`[API] [Turn ${activeTurnId}] WARNING: Zero Output Turn (outTokens: ${outTokens}, textLen: ${textLen}, reasonLen: ${reasonLen}, tools: ${toolCount}, Finish: ${resolvedFinishReason}). Triggering seamless retry (${zeroOutputRetries + 1}/${MAX_ZERO_OUTPUT_RETRIES}). Dumping last 60 lines of raw CLI output for context:`);
           if (proc && proc.rawOutputBuffer) {
              console.log("----------------- [CLI RAW DUMP START] -----------------");
              proc.rawOutputBuffer.forEach(line => console.log(`[Turn ${activeTurnId}] [CLI RAW] ${line}`));
@@ -1228,18 +1246,7 @@ app.post("/v1/chat/completions", handleUpload, async (req, res) => {
       if (process.env.GEMINI_DEBUG_PARALLEL === "true") console.log(`[Turn ${activeTurnId}] onResult: Setting responseSent = true`);
       responseSent = true;
 
-      // [IONOSPHERE] Map CLI finish_reason (Gemini values) to OpenAI values
-      const mapFinishReason = (cliReason) => {
-        if (accumulatedToolCalls.length > 0) return 'tool_calls';
-        if (!cliReason) return 'stop';
-        const r = cliReason.toUpperCase();
-        if (r === 'STOP' || r === 'END_TURN') return 'stop';
-        if (r === 'MAX_TOKENS' || r === 'MAX_OUTPUT_TOKENS') return 'length';
-        if (r === 'SAFETY' || r === 'BLOCKED_REASON_UNSPECIFIED' || r === 'BLOCKLIST' || r === 'PROHIBITED_CONTENT') return 'content_filter';
-        if (r === 'RECITATION') return 'content_filter';
-        return 'stop';
-      };
-      const resolvedFinishReason = mapFinishReason(cliFinishReason || json.finish_reason);
+      // resolvedFinishReason is already calculated above
 
       if (isStreaming) {
         sendChunk({

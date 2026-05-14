@@ -776,6 +776,9 @@ if (fs.existsSync(nonInteractiveTarget)) {
       "                            streamFormatter.emitEvent({\n" +
       "                                type: JsonStreamEventType.RETRY,\n" +
       "                                timestamp: new Date().toISOString(),\n" +
+      "                                attempt: event.attempt,\n" +
+      "                                reason: event.reason,\n" +
+      "                                prev_model: event.prev_model,\n" +
       "                            });\n" +
       "                        }\n" +
       "                    }\n" +
