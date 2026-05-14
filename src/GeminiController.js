@@ -683,8 +683,13 @@ export class GeminiController extends EventEmitter {
           
           if (json.type === "message") {
             const contentObj = json.content || {};
-            const thought = contentObj.thought || contentObj.thinking || json.thinking;
-            if (thought) {
+            // [IONOSPHERE] Extract thought text. If 'thought' is a boolean flag (Gemini 2.0+), the content is in 'text'.
+            let thought = contentObj.thought || contentObj.thinking || json.thinking;
+            if (thought === true && contentObj.text) {
+              thought = contentObj.text;
+            }
+
+            if (thought && typeof thought === "string") {
               console.log(`[GeminiController] [Turn ${turnId}] 🧠 DETECTED REASONING/THOUGHT tokens in message.`);
               // [IONOSPHERE] Reasoning Loop Watchdog for embedded thoughts
               if (this.repetitionBreaker.checkReasoningRepetition(

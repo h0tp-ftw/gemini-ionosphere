@@ -37,7 +37,7 @@ const buildGeminiHistory = (messages) => {
           if (p.type === "text") {
             currentModelParts.push({ text: p.text });
           } else if ((p.type === "thought" || p.type === "reasoning") && process.env.STRIP_REASONING !== "true") {
-            currentModelParts.push({ thought: p.text || p.thought || p.reasoning });
+            currentModelParts.push({ text: p.text || p.thought || p.reasoning, thought: true });
           }
         }
       } else if (typeof content === "string" && content.trim()) {
@@ -46,7 +46,7 @@ const buildGeminiHistory = (messages) => {
 
       const thought = msg.reasoning_content || msg.thought;
       if (thought && typeof thought === "string" && process.env.STRIP_REASONING !== "true") {
-        currentModelParts.push({ thought });
+        currentModelParts.push({ text: thought, thought: true });
       }
 
       if (msg.tool_calls) {
