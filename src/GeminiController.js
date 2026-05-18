@@ -180,7 +180,7 @@ export class GeminiController extends EventEmitter {
     this.errorParser = new CliErrorParser();
 
     this.warmPool = new Map(); // hash -> Array of warm processes
-    this.warmPoolSize = parseInt(process.env.GEMINI_WARM_POOL_SIZE) || 1;
+    this.warmPoolSize = 0; // parseInt(process.env.GEMINI_WARM_POOL_SIZE) || 1; // PRE-WARMING DISABLED DUE TO MEMORY LEAK
 
     if (!fs.existsSync(this.tempDir)) {
       fs.mkdirSync(this.tempDir, { recursive: true });
@@ -208,6 +208,9 @@ export class GeminiController extends EventEmitter {
    * Spawns a background process and waits for it to become warm.
    */
   replenishPool(hashKey, workspacePath, spawnEnv, executable, finalArgs) {
+    // [IONOSPHERE] PRE-WARMING DISABLED DUE TO MEMORY LEAK
+    return;
+
     const currentPool = this.warmPool.get(hashKey) || [];
     if (currentPool.length >= this.warmPoolSize) return;
 
@@ -275,6 +278,9 @@ export class GeminiController extends EventEmitter {
    * Call once after the HTTP server starts listening.
    */
   prewarmDefault() {
+    // [IONOSPHERE] PRE-WARMING DISABLED DUE TO MEMORY LEAK
+    return;
+
     const settingsPath =
       process.env.GEMINI_SETTINGS_JSON ||
       path.join(this.cwd, ".gemini", "settings.json");
