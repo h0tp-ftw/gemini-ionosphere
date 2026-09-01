@@ -1,8 +1,18 @@
 # 🌠 Ionosphere
 
-**Ionosphere** is a strictly stateless HTTP bridge for the [Google Gemini CLI](https://github.com/google-gemini/gemini-cli), allowing you to use the Gemini CLI in any OpenAI-compatible application.
+> [!CAUTION]
+> ### 📦 Project Archived & Deprecated
+> **Ionosphere is now officially archived and obsolete.**
+> 
+> During its active lifespan, Ionosphere served as a high-efficiency HTTP bridge for the Google Gemini CLI, helping users process **billions of tokens** and saving **thousands of dollars** in API and tooling costs.
+> 
+> Because the Gemini CLI is no longer provided or supported, this bridge project is now obsolete and no longer maintained. Thank you to everyone who built on, experimented with, and supported Ionosphere!
 
-It is designed for advanced workflows, including:
+---
+
+**Ionosphere** was a strictly stateless HTTP bridge for the [Google Gemini CLI](https://github.com/google-gemini/gemini-cli), allowing you to use the Gemini CLI in any OpenAI-compatible application.
+
+It was designed for advanced workflows, including:
 - 🤖 **Agentic & ReAct Workflows**: Built for multi-step tool calls.
 - 🔎 **Search Grounding**: Native access to Google Search via the CLI.
 - 📚 **Long Contexts**: Leverage Gemini's massive context window.
